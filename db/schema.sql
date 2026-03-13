@@ -4,27 +4,25 @@ CREATE TABLE IF NOT EXISTS t_versions (
     time TEXT,
     release_time TEXT,
     url TEXT,
-    is_installed BOOLEAN
+    is_installed BOOLEAN DEFAULT FALSE,
+    last_started_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS t_assets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS t_files (
+    path TEXT PRIMARY KEY,
     sha TEXT,
     size INTEGER,
-    path TEXT
+    kind TEXT,
+    ref_count INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS t_libraries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sha TEXT,
-    size INTEGER,
-    path TEXT
+CREATE TABLE IF NOT EXISTS t_version_files (
+    version_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY(version_id, path),
+    FOREIGN KEY(version_id) REFERENCES t_versions(id) ON DELETE CASCADE,
+    FOREIGN KEY(path) REFERENCES t_files(path) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS t_natives (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sha TEXT,
-    size INTEGER,
-    path TEXT,
-    type TEXT
-);
+CREATE INDEX IF NOT EXISTS idx_versions_installed ON t_versions(is_installed);
+CREATE INDEX IF NOT EXISTS idx_files_kind ON t_files(kind);
