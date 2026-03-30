@@ -1,87 +1,107 @@
 package cmd
 
 import (
-	"database/sql"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"strings"
+	"time"
 
-	"github.com/boobam22/gmcl/db"
+	"github.com/boobam22/gmcl/cli"
 	"github.com/spf13/cobra"
 )
 
-type versionManifest struct {
-	Latest   map[string]string `json:"latest"`
-	Versions []struct {
-		ID          string `json:"id"`
-		Type        string `json:"type"`
-		URL         string `json:"url"`
-		Time        string `json:"time"`
-		ReleaseTime string `json:"releaseTime"`
-	} `json:"versions"`
-}
-
-func NewUpdateCmd() *cobra.Command {
+func NewUpdateCmd(g *cli.Gmcl) *cobra.Command {
 	return &cobra.Command{
 		Use:   "update",
 		Short: "Update local version metadata from Mojang",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ensureDirs(); err != nil {
-				return err
-			}
-			conn, err := db.Open()
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
-			manifest, err := fetchManifest()
-			if err != nil {
-				return err
-			}
-			if err := upsertVersions(conn, manifest); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "updated %d versions\n", len(manifest.Versions))
-			return nil
+			return update(g)
 		},
 	}
 }
 
-func fetchManifest() (*versionManifest, error) {
-	resp, err := http.Get(versionManifestURL)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("fetch manifest: %s", resp.Status)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	var m versionManifest
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
+func update(g *cli.Gmcl) error {
+	g.Logger.Info("Starting Minecraft version manifest update...")
 
-func upsertVersions(conn *sql.DB, manifest *versionManifest) error {
-	tx, err := conn.Begin()
+	url := "https://piston-meta.mojang.com/mc/game/version_manifest.json"
+	path := "version_manifest.json"
+	if err := g.DownloadFile(url, path); err != nil {
+		return err
+	}
+
+	var manifest versionManifest
+	if err := g.LoadJSON(path, &manifest); err != nil {
+		return err
+	}
+
+	g.Logger.Infof(
+		"%d total versions, latest release=%s, latest snapshot=%s",
+		len(manifest.Versions),
+		manifest.Latest.Release,
+		manifest.Latest.Snapshot,
+	)
+
+	tx, err := g.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(strings.TrimSpace(`
+		INSERT INTO t_versions(tag, type, url, time, release_time, is_installed)
+		VALUES(?, ?, ?, ?, ?, 0)
+		ON CONFLICT(tag) DO UPDATE
+		SET type=excluded.type,
+			url=excluded.url,
+			time=excluded.time,
+			release_time=excluded.release_time
+		WHERE type != excluded.type
+			OR url != excluded.url
+			OR time != excluded.time
+			OR release_time != excluded.release_time
+	`))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	syncedCount := 0
 	for _, v := range manifest.Versions {
-		if _, err := tx.Exec(`
-INSERT INTO t_versions(id, type, time, release_time, url, is_installed)
-VALUES(?, ?, ?, ?, ?, COALESCE((SELECT is_installed FROM t_versions WHERE id=?), FALSE))
-ON CONFLICT(id) DO UPDATE SET type=excluded.type, time=excluded.time, release_time=excluded.release_time, url=excluded.url`,
-			v.ID, v.Type, v.Time, v.ReleaseTime, v.URL, v.ID); err != nil {
+		vTime, err := formatTimeLocal(v.Time)
+		if err != nil {
 			return err
 		}
+		vReleaseTime, err := formatTimeLocal(v.ReleaseTime)
+		if err != nil {
+			return err
+		}
+
+		res, err := stmt.Exec(v.Tag, v.Type, v.URL, vTime, vReleaseTime)
+		if err != nil {
+			return err
+		}
+
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 1 {
+			syncedCount++
+		}
 	}
-	return tx.Commit()
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	g.Logger.Infof("Version update complete: %d versions synced successfully.", syncedCount)
+	return nil
+}
+
+func formatTimeLocal(s string) (string, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return "", err
+	}
+
+	return t.Local().Format(timeFormat), nil
 }

@@ -1,69 +1,86 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
+	"strings"
 
-	"github.com/boobam22/gmcl/db"
+	"github.com/boobam22/gmcl/cli"
 	"github.com/spf13/cobra"
 )
 
-func NewRemoveCmd() *cobra.Command {
+func NewRemoveCmd(g *cli.Gmcl) *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <version>",
 		Short: "Remove an installed version and unreferenced files",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			version := args[0]
-			conn, err := db.Open()
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
-
-			tx, err := conn.Begin()
-			if err != nil {
-				return err
-			}
-			defer tx.Rollback()
-			if _, err := tx.Exec("DELETE FROM t_version_files WHERE version_id = ?", version); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("UPDATE t_versions SET is_installed = FALSE WHERE id = ?", version); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`UPDATE t_files SET ref_count = (
-SELECT COUNT(*) FROM t_version_files vf WHERE vf.path = t_files.path
-)`); err != nil {
-				return err
-			}
-			rows, err := tx.Query("SELECT path FROM t_files WHERE ref_count = 0")
-			if err != nil {
-				return err
-			}
-			var paths []string
-			for rows.Next() {
-				var p string
-				if err := rows.Scan(&p); err != nil {
-					rows.Close()
-					return err
-				}
-				paths = append(paths, p)
-			}
-			rows.Close()
-			if _, err := tx.Exec("DELETE FROM t_files WHERE ref_count = 0"); err != nil {
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
-			for _, p := range paths {
-				_ = os.Remove(filepath.Join(db.DataDir(), p))
-			}
-			_ = os.RemoveAll(filepath.Join(db.DataDir(), "versions", version))
-			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", version)
-			return nil
+			return remove(g, version)
 		},
 	}
+}
+
+func remove(g *cli.Gmcl, version string) error {
+	if err := validateVersion(g.DB, version, true); err != nil {
+		return err
+	}
+
+	tx, err := g.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE t_versions SET is_installed = 0 WHERE tag = ?", version); err != nil {
+		return err
+	}
+
+	rows, err := tx.Query(strings.TrimSpace(`
+		DELETE FROM t_files
+		WHERE path IN (
+			SELECT path FROM t_version_files vf1
+			WHERE tag = ?
+			AND NOT EXISTS (
+				SELECT 1 FROM t_version_files vf2
+				WHERE vf2.tag != ? AND vf2.path = vf1.path
+			)
+		)
+		RETURNING path
+	`), version, version)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var orphanFiles []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return err
+		}
+		orphanFiles = append(orphanFiles, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	res, err := tx.Exec("DELETE FROM t_version_files WHERE tag = ?", version)
+	if err != nil {
+		return err
+	}
+
+	linksRemoved, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	for _, p := range orphanFiles {
+		g.Remove(p)
+	}
+
+	g.Logger.Infof("%d/%d files removed", len(orphanFiles), linksRemoved)
+	return nil
 }

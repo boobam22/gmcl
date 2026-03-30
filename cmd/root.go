@@ -1,26 +1,26 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/boobam22/gmcl/cli"
+	"github.com/spf13/cobra"
+)
 
-func NewRootCmd() *cobra.Command {
+func NewRootCmd(g *cli.Gmcl) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gmcl",
-		Short: "gmcl is a minimal Minecraft launcher",
+		Short: "Gmcl is a minimal Minecraft launcher",
+
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	cmd.AddCommand(
-		NewUpdateCmd(),
-		NewListCmd(),
-		NewInstallCmd(),
-		NewRemoveCmd(),
-		NewStartCmd(),
+		NewUpdateCmd(g),
+		NewListCmd(g),
+		NewInstallCmd(g),
+		NewRemoveCmd(g),
+		NewStartCmd(g),
 	)
 
 	return cmd
-}
-
-func Execute() {
-	if err := NewRootCmd().Execute(); err != nil {
-		panic(err)
-	}
 }

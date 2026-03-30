@@ -15,7 +15,7 @@ The project is designed to be simple, deterministic, and fully controllable from
 
 ---
 
-# Working Directory
+## Working Directory
 
 gmcl stores all data inside the `.gmcl` directory.
 
@@ -23,13 +23,17 @@ Example structure:
 
 .gmcl/
   db.sqlite
+  gmcl.log
+  version_manifest.json
   versions/
     1.21.5/
-      client.jar
+      libraries/
+        client.jar
+      natives/
       metadata.json
       fabric-metadata.json
-      launch.json
-  libraries/
+      vanilla.arg
+      fabric.arg
   assets/
     indexes/
     objects/
@@ -42,34 +46,14 @@ Explanation:
 - **versions/**  
   Per-version directories containing metadata and files required to launch.
 
-- **libraries/**  
-  Shared libraries downloaded from Mojang.
-
 - **assets/**  
   Minecraft asset storage following the official structure.
 
 ---
 
-# Data Sources
+## Commands
 
-gmcl uses Mojang’s official metadata API.
-
-Main version manifest:
-
-https://piston-meta.mojang.com/mc/game/version_manifest.json
-
-Each version entry references another JSON document that describes:
-
-- downloads
-- libraries
-- asset index
-- launch arguments
-
----
-
-# Commands
-
-## update
+### update
 
 Downloads the latest version manifest and updates the local database.
 
@@ -77,14 +61,15 @@ This command **does not install any game files**.
 
 ---
 
-## list
+### list
 
 Lists versions known to the local database.
 
 Options:
 
-- `--type release`
-- `--type snapshot`
+- `--release`
+- `--snapshot`
+- `--installed`
 
 Pattern is an optional glob filter.
 
@@ -92,13 +77,13 @@ Examples:
 
 ```sh
 gmcl list
-gmcl list --type release
+gmcl list --release
 gmcl list "1.20*"
 ```
 
 ---
 
-## install
+### install
 
 Installs a specific Minecraft version.
 
@@ -107,33 +92,22 @@ Steps:
 1. Verify the version exists in the database.
 2. Download the version metadata.
 3. Parse asset and library dependencies.
-4. Record file references in SQLite.
-5. Download missing files.
+4. Download missing files.
+5. Record file references in SQLite.
 
 Downloads are performed using **32 concurrent workers**.
 
-Files are verified using SHA1 hashes from the official metadata.
-
-Assets are stored using their SHA1-based object layout.
-Libraries follow Mojang's Maven-style directory layout.
-
 ---
 
-## remove
+### remove
 
 Removes an installed version.
-
-Behavior:
-
-1. Remove the version record from the database.
-2. Check file reference counts.
-3. Delete files that are no longer referenced.
 
 Shared files used by other versions are preserved.
 
 ---
 
-## start
+### start
 
 Launches Minecraft using the system Java runtime.
 
@@ -147,7 +121,7 @@ gmcl generates the correct Java launch command and executes it.
 
 ---
 
-# Fabric Mode
+## Fabric Mode
 
 Fabric is enabled by default.
 
@@ -170,7 +144,7 @@ net.fabricmc.loader.impl.launch.knot.KnotClient
 
 ---
 
-# Java Runtime
+## Java Runtime
 
 gmcl does not manage Java installations.
 
